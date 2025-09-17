@@ -54,7 +54,7 @@ def main():
 
         # ACTIVATE (rACT=1, rGTO=0 initially is fine)
         # Many examples also set rGTO=1 immediately; both work.
-        write_ctrl(client, ctrl_regs(0x09,0x00, 0x00,0x00, 0x50,0x50), "ACTIVATE")  # speed/force set to 0x50
+        write_ctrl(client, ctrl_regs(0x01,0x00, 0x00,0x00, 0x50,0x50), "ACTIVATE")  # speed/force set to 0x50
 
         # Give it a moment to finish activation
         time.sleep(0.5)
