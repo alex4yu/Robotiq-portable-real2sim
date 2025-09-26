@@ -1,9 +1,25 @@
 #!/usr/bin/env python3
-# joystick_robotiq_teleop.py
-# Pull joystick DOWN -> gripper CLOSE; otherwise -> OPEN.
+"""
+Combined joystick controller for Robotiq gripper and RealSense recording.
 
-import time, threading
+Controls:
+- Joystick Y-axis: Pull DOWN -> gripper CLOSE, release -> OPEN
+- Joystick button: Press to START/STOP recording
+
+Dependencies:
+  pip install pyrealsense2 smbus2 pymodbus
+"""
+
+import os
+import time
+import threading
+import signal
+import sys
+from datetime import datetime
+
 from smbus2 import SMBus, i2c_msg
+import pyrealsense2 as rs
+
 try:
     from pymodbus.client import ModbusSerialClient          # pymodbus >=3
 except Exception:
@@ -20,6 +36,7 @@ STAT_ADDR = 0x07D0
 I2C_BUS = 1
 JOY_ADDR = 0x63
 REG_XY_INT12 = 0x50          # returns 4 bytes: xL,xH,yL,yH as signed centered values (-4095..4095)
+BTN_REG = 0x20               # 1 = not pressed, 0 = pressed
 POLL_HZ = 100                 # joystick polling rate
 
 # ========= Teleop behavior =========
@@ -34,6 +51,10 @@ CLOSE_SPEED = 0xFF           # 0..255 (0x00..0xFF) Robotiq speed
 CLOSE_FORCE = 0xFF           # 0..255 force
 OPEN_SPEED  = 0xFF
 OPEN_FORCE  = 0xFF
+
+# ========= Recording paths =========
+HOME = os.path.expanduser("~")
+RECORD_DIR = os.path.join(HOME, "robotiq_ws", "recordings")
 
 # ========= Helpers =========
 def ctrl_regs(b0,b1,b2,b3,b4,b5):
@@ -85,6 +106,79 @@ def keepalive(safe, stop_evt):
         safe.read_status(2)
         time.sleep(0.1)
 
+# ========= Recording helpers =========
+def ensure_record_dir():
+    os.makedirs(RECORD_DIR, exist_ok=True)
+
+def next_bag_path():
+    # NOTE: user asked for YYYY-MM-DD-HH.SS.bag (hours.seconds)
+    # If you intended HH.MM.SS, change strftime to "%Y-%m-%d-%H.%M.%S"
+    fname = datetime.now().strftime("%Y-%m-%d-%H.%M.%S") + ".bag"
+    return os.path.join(RECORD_DIR, fname)
+
+class Recorder:
+    def __init__(self):
+        self.pipe = None
+        self.cfg = None
+        self.is_recording = False
+        self.current_path = None
+
+    def start(self, bag_path: str,
+              depth=(640, 480, 15),
+              color=(640, 480, 15),
+              serial: str = None):
+        if self.is_recording:
+            print("[INFO] Already recording.")
+            return
+
+        self.pipe = rs.pipeline()
+        self.cfg = rs.config()
+
+        if serial:
+            self.cfg.enable_device(serial)
+
+        # Enable streams
+        self.cfg.enable_stream(rs.stream.depth, depth[0], depth[1], rs.format.z16, depth[2])
+        self.cfg.enable_stream(rs.stream.color, color[0], color[1], rs.format.rgb8, color[2])
+
+        # Direct SDK recording to file
+        self.cfg.enable_record_to_file(bag_path)
+
+        print(f"[INFO] Starting recording to: {bag_path}")
+        self.pipe.start(self.cfg)
+        self.current_path = bag_path
+        self.is_recording = True
+
+    def stop(self):
+        if not self.is_recording:
+            print("[INFO] Not recording.")
+            return
+
+        print("[INFO] Stopping recording…")
+        try:
+            self.pipe.stop()
+        except Exception as e:
+            print(f"[WARN] pipeline stop error: {e}")
+        finally:
+            self.pipe = None
+            self.cfg = None
+            self.is_recording = False
+            print(f"[OK] Saved: {self.current_path}")
+            self.current_path = None
+
+    def spin_once(self, timeout_s=0.05):
+        """Keep pipeline serviced while recording; not strictly required,
+        but helps the SDK push frames promptly."""
+        if not self.is_recording:
+            time.sleep(timeout_s)
+            return
+        try:
+            # Non-blocking-ish wait
+            self.pipe.poll_for_frames()
+        except Exception:
+            pass
+        time.sleep(timeout_s)
+
 # ---- Joystick read (M5 Joystick2) ----
 def reg_read(addr, reg, n):
     with SMBus(I2C_BUS) as bus:
@@ -106,12 +200,40 @@ def read_xy_int12():
         y = -y
     return x, y
 
+def read_button_pressed() -> bool:
+    try:
+        val = reg_read(JOY_ADDR, BTN_REG, 1)[0]
+        return (val == 0)
+    except Exception as e:
+        # If I2C hiccups, treat as not pressed, but print once
+        print(f"[WARN] I2C read failed: {e}")
+        time.sleep(0.1)
+        return False
+
 def main():
+    # Initialize recording directory
+    ensure_record_dir()
+    
+    # Initialize Modbus client
     safe = SafeModbusClient(PORT, BAUD, UNIT)
     if not safe.connect():
         print("❌ Could not open Modbus port")
         return
 
+    # Initialize recorder
+    rec = Recorder()
+
+    # Clean shutdown on Ctrl+C
+    def handle_sigint(sig, frame):
+        print("\n[INFO] Ctrl+C received.")
+        if rec.is_recording:
+            rec.stop()
+        cmd_open(safe)  # Open gripper on exit
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, handle_sigint)
+
+    # Start keepalive thread
     stop_evt = threading.Event()
     threading.Thread(target=keepalive, args=(safe, stop_evt), daemon=True).start()
 
@@ -121,16 +243,27 @@ def main():
 
     # Teleop state machine
     state = "OPEN"   # "OPEN" or "CLOSE"
-    print("[READY] Pull joystick DOWN to CLOSE, release to OPEN. Ctrl-C to exit.")
+    print("[READY] Combined joystick control:")
+    print("        - Pull joystick DOWN to CLOSE gripper, release to OPEN")
+    print("        - Press joystick button to START/STOP recording")
+    print("        - Ctrl-C to exit")
     print(f"[INFO ] Hysteresis: enter_close={TH_DOWN_ENTER}, exit_close={TH_DOWN_EXIT}, invert_y={INVERT_Y}")
+    print(f"[PATH ] Recordings -> {RECORD_DIR}")
+
+    # Button debouncing
+    prev_pressed = False
+    debounce_ms = 150
+    last_edge_time = 0.0
 
     try:
         period = 1.0 / POLL_HZ
         t_next = time.time()
         while True:
             x, y = read_xy_int12()
+            pressed = read_button_pressed()
+            now = time.time()
 
-            # Hysteresis logic:
+            # Gripper control with hysteresis logic:
             if state == "OPEN":
                 if y < TH_DOWN_ENTER:
                     state = "CLOSE"
@@ -142,8 +275,22 @@ def main():
                     cmd_open(safe)
                     print(f"[JOY ] y={y:5d} -> OPEN")
 
+            # Recording toggle with debouncing
+            if pressed and not prev_pressed and (now - last_edge_time) * 1000.0 > debounce_ms:
+                last_edge_time = now
+                if not rec.is_recording:
+                    path = next_bag_path()
+                    rec.start(path)
+                else:
+                    rec.stop()
+
+            prev_pressed = pressed
+
+            # Service recording pipeline
+            rec.spin_once(timeout_s=0.01)
+
             # Optional debug print (comment out if noisy)
-            # print(f"[DBG ] x={x:5d} y={y:5d} state={state}")
+            # print(f"[DBG ] x={x:5d} y={y:5d} state={state} btn={pressed} rec={rec.is_recording}")
 
             # pace loop
             t_next += period
@@ -153,13 +300,14 @@ def main():
             else:
                 t_next = time.time()
     except KeyboardInterrupt:
-        print("\n[EXIT] Opening then quitting...")
+        print("\n[EXIT] Opening gripper then quitting...")
         cmd_open(safe)
     finally:
+        if rec.is_recording:
+            rec.stop()
         stop_evt.set()
         time.sleep(0.2)
         safe.close()
 
 if __name__ == "__main__":
     main()
-

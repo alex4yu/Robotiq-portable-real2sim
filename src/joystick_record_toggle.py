@@ -51,7 +51,7 @@ def ensure_record_dir():
 def next_bag_path():
     # NOTE: user asked for YYYY-MM-DD-HH.SS.bag (hours.seconds)
     # If you intended HH.MM.SS, change strftime to "%Y-%m-%d-%H.%M.%S"
-    fname = datetime.now().strftime("%Y-%m-%d-%H.%S") + ".bag"
+    fname = datetime.now().strftime("%Y-%m-%d-%H.%M.%S") + ".bag"
     return os.path.join(RECORD_DIR, fname)
 
 # ---------------- RealSense helpers ----------------
