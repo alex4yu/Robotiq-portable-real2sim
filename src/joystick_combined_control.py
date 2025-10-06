@@ -5,6 +5,7 @@ Combined joystick controller for Robotiq gripper and RealSense recording.
 Controls:
 - Joystick Y-axis: Pull DOWN -> gripper CLOSE, release -> OPEN
 - Joystick button: Press to START/STOP recording
+- LED shows RED when not recording, GREEN when recording (BGR format)
 
 Dependencies:
   pip install pyrealsense2 smbus2 pymodbus
@@ -148,6 +149,9 @@ class Recorder:
         self.pipe.start(self.cfg)
         self.current_path = bag_path
         self.is_recording = True
+        
+        # Set LED to GREEN (recording)
+        set_led_recording_state(True)
 
     def stop(self):
         if not self.is_recording:
@@ -165,6 +169,9 @@ class Recorder:
             self.is_recording = False
             print(f"[OK] Saved: {self.current_path}")
             self.current_path = None
+            
+            # Set LED to RED (not recording)
+            set_led_recording_state(False)
 
     def spin_once(self, timeout_s=0.05):
         """Keep pipeline serviced while recording; not strictly required,
@@ -210,6 +217,37 @@ def read_button_pressed() -> bool:
         time.sleep(0.1)
         return False
 
+def reg_write(addr, reg, data):
+    """Write data to I2C register"""
+    try:
+        with SMBus(I2C_BUS) as bus:
+            bus.write_byte_data(addr, reg, data)
+        return True
+    except Exception as e:
+        print(f"[WARN] I2C write failed: {e}")
+        return False
+
+def set_led_color(r, g, b):
+    """Set LED color using BGR format (Blue-Green-Red)"""
+    try:
+        # Use BGR format for M5Stack JS2 joystick
+        reg_write(JOY_ADDR, 0x30, b)  # Blue component
+        reg_write(JOY_ADDR, 0x31, g)  # Green component  
+        reg_write(JOY_ADDR, 0x32, r)  # Red component
+        return True
+    except Exception as e:
+        print(f"[WARN] LED control failed: {e}")
+        return False
+
+def set_led_recording_state(is_recording):
+    """Set LED based on recording state"""
+    if is_recording:
+        # Recording - show GREEN
+        set_led_color(0, 255, 0)  # Green (BGR format)
+    else:
+        # Not recording - show RED
+        set_led_color(255, 0, 0)  # Red (BGR format)
+
 def main():
     # Initialize recording directory
     ensure_record_dir()
@@ -229,6 +267,8 @@ def main():
         if rec.is_recording:
             rec.stop()
         cmd_open(safe)  # Open gripper on exit
+        # Turn off LED on shutdown
+        set_led_color(0, 0, 0)  # Turn off LED
         sys.exit(0)
 
     signal.signal(signal.SIGINT, handle_sigint)
@@ -249,6 +289,10 @@ def main():
     print("        - Ctrl-C to exit")
     print(f"[INFO ] Hysteresis: enter_close={TH_DOWN_ENTER}, exit_close={TH_DOWN_EXIT}, invert_y={INVERT_Y}")
     print(f"[PATH ] Recordings -> {RECORD_DIR}")
+    print("[LED  ] RED = Not recording, GREEN = Recording")
+    
+    # Initialize LED to RED (not recording)
+    set_led_recording_state(False)
 
     # Button debouncing
     prev_pressed = False
@@ -307,6 +351,8 @@ def main():
             rec.stop()
         stop_evt.set()
         time.sleep(0.2)
+        # Turn off LED on exit
+        set_led_color(0, 0, 0)  # Turn off LED
         safe.close()
 
 if __name__ == "__main__":

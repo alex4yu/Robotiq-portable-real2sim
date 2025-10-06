@@ -1,2 +1,7 @@
 pymodbus
 pyserial
+pyrealsense2
+smbus2
+evdev
+pynput
+minimalmodbus
