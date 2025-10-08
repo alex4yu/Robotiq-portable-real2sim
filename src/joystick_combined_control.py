@@ -90,11 +90,23 @@ class SafeModbusClient:
             print("[MODBUS] close()")
 
 def activate(safe):
-    # Minimal activation - only set rACT bit, no movement commands
+    # Full activation with required calibration sequence
+    print("[INFO] Deactivating gripper...")
     safe.write_ctrl(ctrl_regs(0,0, 0,0, 0,0), "DEACTIVATE"); time.sleep(0.2)
-    safe.write_ctrl(ctrl_regs(0x01,0, 0,0, 0,0), "ACTIVATE"); time.sleep(0.5)
-    # Wait for activation to complete without sending any position commands
-    print("[INFO] Gripper activated - ready for joystick control")
+    
+    print("[INFO] Activating gripper with calibration...")
+    # Activate with rACT=1, rGTO=1, position=0 (open), speed/force for calibration
+    safe.write_ctrl(ctrl_regs(0x09,0, 0,0x00, 0x50,0x50), "ACTIVATE_OPEN"); time.sleep(1.0)
+    
+    print("[INFO] Calibration close...")
+    # Close for calibration
+    safe.write_ctrl(ctrl_regs(0x09,0, 0,0xFF, 0x50,0x50), "CALIB_CLOSE"); time.sleep(1.0)
+    
+    print("[INFO] Calibration open...")
+    # Open for calibration
+    safe.write_ctrl(ctrl_regs(0x09,0, 0,0x00, 0x50,0x50), "CALIB_OPEN"); time.sleep(1.0)
+    
+    print("[INFO] Gripper activated and calibrated - ready for joystick control")
 
 def cmd_close(safe, speed=CLOSE_SPEED, force=CLOSE_FORCE):
     return safe.write_ctrl(ctrl_regs(0x09,0, 0,0xFF, speed, force), "CLOSE")
@@ -277,9 +289,8 @@ def main():
     stop_evt = threading.Event()
     threading.Thread(target=keepalive, args=(safe, stop_evt), daemon=True).start()
 
-    # Init gripper - skip activation to prevent movement
-    # activate(safe)  # Commented out to prevent initial movement
-    print("[INFO] Skipping gripper activation to prevent initial movement")
+    # Init gripper with required calibration
+    activate(safe)
 
     # Teleop state machine
     state = "OPEN"   # "OPEN" or "CLOSE"

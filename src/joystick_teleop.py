@@ -115,9 +115,9 @@ def main():
     stop_evt = threading.Event()
     threading.Thread(target=keepalive, args=(safe, stop_evt), daemon=True).start()
 
-    # Init gripper - skip activation to prevent movement
-    # activate(safe)  # Commented out to prevent initial movement
-    print("[INFO] Skipping gripper activation to prevent initial movement")
+    # Init gripper - activate it
+    activate(safe)
+    print("[INFO] Gripper activated and ready for joystick control")
 
     # Teleop state machine
     state = "OPEN"   # "OPEN" or "CLOSE"
