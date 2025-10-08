@@ -1,0 +1,11 @@
+bmi270_imu_publisher:
+  ros__parameters:
+    i2c_bus: 1
+    address: 0x68
+    accel_scale: 4
+    gyro_scale: 2000
+    imu_topic: "/imu/data"
+    temp_topic: "/imu/temperature"
+    frame_id: "imu_link"
+    publish_rate: 50
+    debug: false
