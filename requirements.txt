@@ -1,6 +1,6 @@
-pymodbus
+# Core dependencies (required)
+pymodbus==2.5.3  # v2.x for stable API (v3.x has breaking changes)
 pyserial
-pyrealsense2
 smbus2
 evdev
 pynput

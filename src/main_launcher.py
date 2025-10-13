@@ -89,8 +89,8 @@ class SystemLauncher:
             print("ROS 2 not found. Please install ROS 2 Jazzy.")
             return None
         
-        # Create a single bash command that sources everything
-        cmd = """bash -c 'source ~/robotiq_ws/venv/bin/activate && source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash && ros2 run m5_imu_pro_ros2 imu_publisher'"""
+        # Create a single bash command that sources ROS 2 (no venv needed)
+        cmd = """bash -c 'source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash && ros2 run m5_imu_pro_ros2 imu_publisher'"""
         
         return self.start_process(cmd, "IMU Publisher")
     
@@ -123,6 +123,7 @@ class SystemLauncher:
         # Check Python packages
         required_packages = ['smbus2', 'pymodbus', 'pyrealsense2']
         missing_packages = []
+        missing_optional = []
         
         for package in required_packages:
             try:

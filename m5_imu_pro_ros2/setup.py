@@ -13,7 +13,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'smbus2'],
     zip_safe=True,
     maintainer='User',
     maintainer_email='user@example.com',
