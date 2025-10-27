@@ -4,7 +4,7 @@ Combined joystick controller for Robotiq gripper and RealSense recording.
 
 Controls:
 - Joystick Y-axis: Pull DOWN -> gripper CLOSE, release -> OPEN
-- Joystick button: Press to START/STOP recording
+- Joystick button: Press to START/STOP recording (IR1, IR2, Color streams)
 - LED shows RED when not recording, GREEN when recording (BGR format)
 
 Dependencies:
@@ -137,8 +137,7 @@ class Recorder:
         self.current_path = None
 
     def start(self, bag_path: str,
-              depth=(640, 480, 15),
-              color=(640, 480, 15),
+              width=640, height=480, fps=15,
               serial: str = None):
         if self.is_recording:
             print("[INFO] Already recording.")
@@ -150,11 +149,14 @@ class Recorder:
         if serial:
             self.cfg.enable_device(serial)
 
-        # Enable streams
-        self.cfg.enable_stream(rs.stream.depth, depth[0], depth[1], rs.format.z16, depth[2])
-        self.cfg.enable_stream(rs.stream.color, color[0], color[1], rs.format.rgb8, color[2])
+        # Enable IR streams (left = index 1, right = index 2)
+        self.cfg.enable_stream(rs.stream.infrared, 1, width, height, rs.format.y8, fps)
+        self.cfg.enable_stream(rs.stream.infrared, 2, width, height, rs.format.y8, fps)
 
-        # Direct SDK recording to file
+        # Enable Color stream
+        self.cfg.enable_stream(rs.stream.color, width, height, rs.format.rgb8, fps)
+
+        # Direct SDK recording to file (no depth enabled)
         self.cfg.enable_record_to_file(bag_path)
 
         print(f"[INFO] Starting recording to: {bag_path}")

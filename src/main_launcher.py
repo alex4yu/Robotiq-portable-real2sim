@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Main launcher for Robotiq gripper system with IMU and recording
-Starts all components: joystick teleop, IMU publisher, and recording control
+Main launcher for Robotiq gripper system with IMU, FT sensor, and recording
+Starts all components: joystick teleop, IMU publisher, FT sensor publisher, and recording control
 """
 
 import os
@@ -107,6 +107,19 @@ class SystemLauncher:
         cmd = f"python3 {joystick_script}"
         return self.start_process(cmd, "Joystick Teleop")
     
+    def start_ft_sensor_publisher(self):
+        """Start the FT sensor ROS publisher"""
+        print("Starting FT sensor ROS publisher...")
+        
+        ft_sensor_script = self.script_dir / "ft_sensor_ros_publisher.py"
+        
+        if not ft_sensor_script.exists():
+            print(f"FT sensor script not found: {ft_sensor_script}")
+            return None
+        
+        cmd = f"python3 {ft_sensor_script}"
+        return self.start_process(cmd, "FT Sensor Publisher")
+    
     def start_recording_control(self):
         """Start the recording control system"""
         print("Starting recording control...")
@@ -121,13 +134,15 @@ class SystemLauncher:
         print("Checking dependencies...")
         
         # Check Python packages
-        required_packages = ['smbus2', 'pymodbus', 'pyrealsense2']
+        required_packages = ['smbus2', 'pymodbus', 'pyrealsense2', 'minimalmodbus', 'pyserial']
         missing_packages = []
         missing_optional = []
         
         for package in required_packages:
             try:
-                __import__(package)
+                # Handle special case for pyserial (imported as 'serial')
+                import_name = 'serial' if package == 'pyserial' else package
+                __import__(import_name)
                 print(f"✓ {package}")
             except ImportError:
                 missing_packages.append(package)
@@ -208,6 +223,16 @@ class SystemLauncher:
         # Wait a moment for IMU to initialize
         time.sleep(2)
         
+        # Start FT sensor publisher
+        ft_process = self.start_ft_sensor_publisher()
+        if not ft_process:
+            print("Failed to start FT sensor publisher")
+            self.stop_all_processes()
+            return
+        
+        # Wait a moment for FT sensor to initialize
+        time.sleep(1)
+        
         # Start joystick teleop (includes recording control)
         joystick_process = self.start_joystick_teleop()
         if not joystick_process:
@@ -220,8 +245,9 @@ class SystemLauncher:
         print("=" * 60)
         print("Components running:")
         print("- IMU Publisher: Publishing to /imu/data and /imu/temperature")
+        print("- FT Sensor Publisher: Publishing to /ft_sensor/wrench and /ft_sensor/acceleration")
         print("- Joystick Teleop: Control gripper with joystick Y-axis")
-        print("- Recording Control: Press joystick button to start/stop recording")
+        print("- Recording Control: Press joystick button to start/stop recording (IR1, IR2, Color)")
         print("- LED Status: RED = not recording, GREEN = recording")
         print("\nPress Ctrl+C to stop all components")
         print("=" * 60)

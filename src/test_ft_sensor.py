@@ -11,7 +11,7 @@ NM_TORQUE_SCALE = 1000.0    # Mx/My/Mz in Nm = value / 1000
 G_ACC_SCALE     = 1000.0    # Accel in g = value / 1000
 
 # --- Hard-coded config ---
-PORT  = "/dev/ttySC0"
+PORT  = "/dev/ttySC1"
 SLAVE = 9
 
 def make_instrument():
