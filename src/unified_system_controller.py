@@ -3,14 +3,16 @@
 Unified System Controller for Robotiq Gripper with Recording
 
 Combines:
-- Joystick teleoperation of Robotiq gripper
+- Joystick teleoperation of Robotiq gripper (PROPORTIONAL CONTROL)
 - RealSense streaming (IR1, IR2, Color, Depth) 
 - IMU data publishing
 - FT sensor data publishing
 - Unified ROS bag recording of all streams
 
 Controls:
-- Joystick Y-axis: Pull DOWN -> gripper CLOSE, release -> OPEN
+- Joystick UP: Gripper OPENS (push further = faster opening)
+- Joystick DOWN: Gripper CLOSES (pull further = faster + stronger grip)
+- Joystick CENTER: Gripper STOPS and holds position
 - Joystick button: Press to START/STOP recording all data streams
 - LED shows RED when not recording, GREEN when recording (BGR format)
 
@@ -61,15 +63,32 @@ REG_XY_INT12 = 0x50          # returns 4 bytes: xL,xH,yL,yH as signed centered v
 BTN_REG = 0x20               # 1 = not pressed, 0 = pressed
 POLL_HZ = 100                 # joystick polling rate
 
-# ========= Teleop behavior =========
+# ========= Teleop behavior (Proportional Control) =========
 INVERT_Y = False
-TH_DOWN_ENTER = -900         # go to CLOSE when Y < this
-TH_DOWN_EXIT  = -400         # leave CLOSE when Y > this  (prevents chatter near center)
+INVERT_X = False
 
-CLOSE_SPEED = 0xFF           # 0..255 (0x00..0xFF) Robotiq speed
-CLOSE_FORCE = 0xFF           # 0..255 force
-OPEN_SPEED  = 0xFF
-OPEN_FORCE  = 0xFF
+# Deadzone - no action when joystick is centered within this radius
+DEADZONE_RADIUS = 200
+
+# Y-axis thresholds for OPEN and CLOSE (up/down control)
+Y_OPEN_THRESHOLD = 300       # Trigger open when Y > this (positive = UP)
+Y_MAX_PUSH = 3000            # Maximum expected Y push for speed mapping (UP)
+Y_CLOSE_THRESHOLD = -300     # Trigger close when Y < this (negative = DOWN)
+Y_MAX_PULL = -3000           # Maximum expected Y pull for speed/force mapping (DOWN)
+
+# Speed settings (proportional control)
+MIN_OPEN_SPEED = 0x10        # Minimum speed when just crossing threshold (very slow, precise)
+MAX_OPEN_SPEED = 0xFF        # Maximum speed when fully pushed up (fast)
+MIN_CLOSE_SPEED = 0x10       # Minimum speed when just crossing threshold (very slow, precise)
+MAX_CLOSE_SPEED = 0xFF       # Maximum speed when fully pulled down (fast)
+
+# Force settings
+OPEN_FORCE = 0xFF            # Fixed force for opening (use max for reliable opening)
+MIN_CLOSE_FORCE = 0x10       # Minimum force when just crossing threshold (very gentle)
+MAX_CLOSE_FORCE = 0xFF       # Maximum force when fully pulled down (strong)
+
+# Command rate limiting
+MIN_COMMAND_INTERVAL = 0.05  # Minimum time between commands (50ms = 20Hz max)
 
 # ========= Recording paths =========
 HOME = os.path.expanduser("~")
@@ -100,6 +119,15 @@ BMI270_TEMP = 0x22
 # ========= Helpers =========
 def ctrl_regs(b0,b1,b2,b3,b4,b5):
     return [(b0<<8)|b1, (b2<<8)|b3, (b4<<8)|b5]
+
+def map_range(value, in_min, in_max, out_min, out_max):
+    """Map a value from one range to another, with clamping"""
+    # Clamp input
+    value = max(in_min, min(in_max, value))
+    # Linear mapping
+    result = (value - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
+    # Clamp output
+    return int(max(out_min, min(out_max, result)))
 
 class SafeModbusClient:
     def __init__(self, port, baud, unit):
@@ -143,13 +171,41 @@ def activate(safe):
     print("[INFO] Calibration open...")
     safe.write_ctrl(ctrl_regs(0x09,0, 0,0x00, 0x50,0x50), "CALIB_OPEN"); time.sleep(1.0)
     
-    print("[INFO] Gripper activated and calibrated - ready for joystick control")
+    print("[INFO] Gripper activated and calibrated - ready for proportional joystick control")
 
-def cmd_close(safe, speed=CLOSE_SPEED, force=CLOSE_FORCE):
-    return safe.write_ctrl(ctrl_regs(0x09,0, 0,0xFF, speed, force), "CLOSE")
+def cmd_grip(safe, position, speed, force, label=""):
+    """
+    Send a grip command with specific position, speed, and force
+    
+    Args:
+        position: 0x00 (open) to 0xFF (closed)
+        speed: 0x00 (slow) to 0xFF (fast)
+        force: 0x00 (gentle) to 0xFF (strong)
+    """
+    # Byte 0: rACT=1, rGTO=1 (activate and go to position)
+    byte0 = 0x09  # 0b00001001 = rACT | rGTO
+    byte1 = 0x00  # Reserved
+    byte2 = 0x00  # Reserved
+    byte3 = position & 0xFF
+    byte4 = speed & 0xFF
+    byte5 = force & 0xFF
+    
+    return safe.write_ctrl(ctrl_regs(byte0, byte1, byte2, byte3, byte4, byte5), label)
 
-def cmd_open(safe, speed=OPEN_SPEED, force=OPEN_FORCE):
-    return safe.write_ctrl(ctrl_regs(0x09,0, 0,0x00, speed, force), "OPEN")
+def cmd_stop(safe, label=""):
+    """
+    Send a STOP command - gripper stops and holds current position
+    Sets rACT=1 (stay activated) but rGTO=0 (stop motion)
+    """
+    # Byte 0: rACT=1, rGTO=0 (activated but not going to position = STOP)
+    byte0 = 0x01  # 0b00000001 = rACT only
+    byte1 = 0x00  # Reserved
+    byte2 = 0x00  # Reserved
+    byte3 = 0x00  # Position doesn't matter when rGTO=0
+    byte4 = 0x00  # Speed doesn't matter when rGTO=0
+    byte5 = 0x00  # Force doesn't matter when rGTO=0
+    
+    return safe.write_ctrl(ctrl_regs(byte0, byte1, byte2, byte3, byte4, byte5), label)
 
 def keepalive(safe, stop_evt):
     while not stop_evt.is_set():
@@ -263,17 +319,22 @@ class UnifiedSystemController(Node):
         self.debounce_ms = 150
         self.last_edge_time = 0.0
         
-        # Gripper state
-        self.gripper_state = "OPEN"  # "OPEN" or "CLOSE"
+        # Gripper state (proportional control)
         self.gripper_safe = None
         self.gripper_keepalive_thread = None
         self.gripper_stop_event = None
+        self.last_action = None  # "OPEN", "CLOSE", "STOP"
+        self.last_force = None
+        self.last_speed = None
+        self.last_cmd_time = 0
         
         # Initialize LED to RED (not recording)
         set_led_recording_state(False)
         
         print("[READY] Unified System Controller initialized")
-        print("        - Joystick Y-axis: Pull DOWN to CLOSE gripper, release to OPEN")
+        print("        - Joystick UP: OPEN gripper (push further = faster)")
+        print("        - Joystick DOWN: CLOSE gripper (pull further = faster + stronger)")
+        print("        - Joystick CENTER: STOP and hold position")
         print("        - Joystick button: Press to START/STOP recording all streams")
         print(f"[PATH ] Recordings -> {RECORD_DIR}")
         print("[LED  ] RED = Not recording, GREEN = Recording")
@@ -310,17 +371,6 @@ class UnifiedSystemController(Node):
             print(f"[ERROR] Failed to initialize gripper: {e}")
             return False
     
-    def gripper_close(self, speed=CLOSE_SPEED, force=CLOSE_FORCE):
-        """Close the gripper"""
-        if self.gripper_safe:
-            return cmd_close(self.gripper_safe, speed, force)
-        return False
-    
-    def gripper_open(self, speed=OPEN_SPEED, force=OPEN_FORCE):
-        """Open the gripper"""
-        if self.gripper_safe:
-            return cmd_open(self.gripper_safe, speed, force)
-        return False
     
     def start_streaming(self):
         """Start RealSense streaming"""
@@ -490,18 +540,83 @@ class UnifiedSystemController(Node):
         
         now = time.time()
         
-        # Gripper control with hysteresis logic
+        # Gripper proportional control
         if self.gripper_safe:
-            if self.gripper_state == "OPEN":
-                if y < TH_DOWN_ENTER:
-                    self.gripper_state = "CLOSE"
-                    self.gripper_close()
-                    print(f"[JOY ] y={y:5d} -> CLOSE")
-            else:  # state == "CLOSE"
-                if y > TH_DOWN_EXIT:
-                    self.gripper_state = "OPEN"
-                    self.gripper_open()
-                    print(f"[JOY ] y={y:5d} -> OPEN")
+            # Determine what action to take based on joystick position
+            current_action = None
+            target_force = None
+            target_speed = None
+            
+            # Priority 1: Check for OPEN command (UP)
+            if y > Y_OPEN_THRESHOLD:
+                current_action = "OPEN"
+                target_force = OPEN_FORCE
+                
+                # Proportional speed based on how far joystick is pushed up
+                target_speed = map_range(
+                    y,
+                    Y_OPEN_THRESHOLD,
+                    Y_MAX_PUSH,
+                    MIN_OPEN_SPEED,
+                    MAX_OPEN_SPEED
+                )
+            
+            # Priority 2: Check for CLOSE command (DOWN)
+            elif y < Y_CLOSE_THRESHOLD:
+                current_action = "CLOSE"
+                
+                # Proportional force AND speed based on how far joystick is pulled down
+                target_force = map_range(
+                    abs(y), 
+                    abs(Y_CLOSE_THRESHOLD), 
+                    abs(Y_MAX_PULL),
+                    MIN_CLOSE_FORCE, 
+                    MAX_CLOSE_FORCE
+                )
+                target_speed = map_range(
+                    abs(y), 
+                    abs(Y_CLOSE_THRESHOLD), 
+                    abs(Y_MAX_PULL),
+                    MIN_CLOSE_SPEED, 
+                    MAX_CLOSE_SPEED
+                )
+            
+            # Priority 3: In deadzone - STOP
+            else:
+                current_action = "STOP"
+            
+            # Decide if we need to send a command
+            send_command = False
+            
+            # Always send command if action changed
+            if current_action != self.last_action:
+                send_command = True
+            
+            # If opening with same action, check if speed changed significantly
+            elif current_action == "OPEN" and target_speed is not None and self.last_speed is not None:
+                if abs(target_speed - self.last_speed) > 5:
+                    send_command = True
+            
+            # If closing with same action, check if force or speed changed significantly
+            elif current_action == "CLOSE" and target_force is not None and self.last_force is not None:
+                force_changed = abs(target_force - self.last_force) > 5
+                speed_changed = self.last_speed is not None and abs(target_speed - self.last_speed) > 5
+                if force_changed or speed_changed:
+                    send_command = True
+            
+            # Send command if needed and rate limit allows
+            if send_command and (now - self.last_cmd_time) >= MIN_COMMAND_INTERVAL:
+                if current_action == "OPEN":
+                    cmd_grip(self.gripper_safe, 0x00, target_speed, target_force, "")
+                elif current_action == "CLOSE":
+                    cmd_grip(self.gripper_safe, 0xFF, target_speed, target_force, "")
+                elif current_action == "STOP":
+                    cmd_stop(self.gripper_safe, "")
+                
+                self.last_action = current_action
+                self.last_force = target_force
+                self.last_speed = target_speed
+                self.last_cmd_time = now
         
         # Recording toggle with debouncing
         if pressed and not self.prev_pressed and (now - self.last_edge_time) * 1000.0 > self.debounce_ms:
@@ -539,7 +654,8 @@ class UnifiedSystemController(Node):
         # Cleanup gripper
         if self.gripper_safe:
             print("[INFO] Opening gripper before shutdown...")
-            self.gripper_open()
+            cmd_grip(self.gripper_safe, 0x00, MAX_OPEN_SPEED, OPEN_FORCE, "FINAL OPEN")
+            time.sleep(0.5)
             if self.gripper_stop_event:
                 self.gripper_stop_event.set()
             if self.gripper_keepalive_thread:
