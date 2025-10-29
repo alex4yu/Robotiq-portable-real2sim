@@ -161,17 +161,6 @@ class FTSensorPublisher(Node):
             
             self.accel_pub.publish(accel_msg)
             
-            # Optional: Log data periodically (every 1 second)
-            if hasattr(self, '_last_log_time'):
-                if time.time() - self._last_log_time > 1.0:
-                    self.get_logger().info(
-                        f"FT: Fx={fx:.3f}N Fy={fy:.3f}N Fz={fz:.3f}N "
-                        f"Mx={mx:.4f}Nm My={my:.4f}Nm Mz={mz:.4f}Nm | "
-                        f"Accel: ax={ax:.4f}g ay={ay:.4f}g az={az:.4f}g"
-                    )
-                    self._last_log_time = time.time()
-            else:
-                self._last_log_time = time.time()
                 
         except Exception as e:
             self.get_logger().error(f"Error publishing FT data: {e}")

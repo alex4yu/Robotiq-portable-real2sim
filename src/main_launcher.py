@@ -94,18 +94,20 @@ class SystemLauncher:
         
         return self.start_process(cmd, "IMU Publisher")
     
-    def start_joystick_teleop(self):
-        """Start the joystick teleop with LED control"""
-        print("Starting joystick teleop with LED control...")
+    def start_unified_system(self):
+        """Start the unified system controller"""
+        print("Starting unified system controller...")
         
-        joystick_script = self.script_dir / "joystick_combined_control.py"
+        unified_script = self.script_dir / "unified_system_controller.py"
         
-        if not joystick_script.exists():
-            print(f"Joystick script not found: {joystick_script}")
+        if not unified_script.exists():
+            print(f"Unified system script not found: {unified_script}")
             return None
         
-        cmd = f"python3 {joystick_script}"
-        return self.start_process(cmd, "Joystick Teleop")
+        # Create a single bash command that sources ROS 2 and runs the unified controller
+        cmd = """bash -c 'source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash && python3 """ + str(unified_script) + """'"""
+        
+        return self.start_process(cmd, "Unified System Controller")
     
     def start_ft_sensor_publisher(self):
         """Start the FT sensor ROS publisher"""
@@ -124,9 +126,10 @@ class SystemLauncher:
         """Start the recording control system"""
         print("Starting recording control...")
         
-        # This could be a separate recording manager or integrated with joystick
-        # For now, recording is controlled via the joystick button
+        # Recording control is integrated with joystick teleop
+        # The joystick button will start/stop ROS bag recording of all streams
         print("Recording control is integrated with joystick teleop")
+        print("Recording topics: /camera/infra1/image_raw, /camera/infra2/image_raw, /camera/color/image_raw, /camera/depth/image_raw, /imu/data, /ft_sensor/wrench, /ft_sensor/acceleration")
         return None
     
     def check_dependencies(self):
@@ -233,10 +236,10 @@ class SystemLauncher:
         # Wait a moment for FT sensor to initialize
         time.sleep(1)
         
-        # Start joystick teleop (includes recording control)
-        joystick_process = self.start_joystick_teleop()
-        if not joystick_process:
-            print("Failed to start joystick teleop")
+        # Start unified system controller (includes gripper control and recording)
+        unified_process = self.start_unified_system()
+        if not unified_process:
+            print("Failed to start unified system controller")
             self.stop_all_processes()
             return
         
@@ -246,9 +249,11 @@ class SystemLauncher:
         print("Components running:")
         print("- IMU Publisher: Publishing to /imu/data and /imu/temperature")
         print("- FT Sensor Publisher: Publishing to /ft_sensor/wrench and /ft_sensor/acceleration")
-        print("- Joystick Teleop: Control gripper with joystick Y-axis")
-        print("- Recording Control: Press joystick button to start/stop recording (IR1, IR2, Color)")
-        print("- LED Status: RED = not recording, GREEN = recording")
+        print("- Unified System Controller: Gripper control + RealSense streaming + Recording")
+        print("  * Joystick Y-axis: Control gripper (DOWN=close, release=open)")
+        print("  * Joystick button: Start/stop recording all streams")
+        print("  * Recording topics: IR1, IR2, Color, Depth, IMU, FT sensor")
+        print("  * LED Status: RED = not recording, GREEN = recording")
         print("\nPress Ctrl+C to stop all components")
         print("=" * 60)
         
