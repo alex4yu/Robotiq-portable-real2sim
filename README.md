@@ -413,6 +413,100 @@ Press `Ctrl+C` in the terminal running `main_launcher.py`. The launcher will:
 3. Open the gripper before shutdown
 4. Turn off LED indicators
 
+## Auto-Start on Boot
+
+To automatically start the system when the Raspberry Pi boots, set up a systemd service:
+
+### 1. **Configure the Service File**
+
+Edit `robotiq-system.service` and update the following:
+- Replace `geoduderp5` with your actual Linux username (appears twice)
+- Update the `WorkingDirectory` path to your actual project directory
+- Update the paths in `ExecStart` to match your ROS 2 installation and project location
+
+Example (if your username is `pi` and project is in `/home/pi/robotiq_ws`):
+```ini
+[Unit]
+Description=Robotiq Gripper System Launcher
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/robotiq_ws
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash && python3 /home/pi/robotiq_ws/src/main_launcher.py'
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=robotiq-system
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Note:** The service directly sources ROS 2 and runs the launcher - no wrapper script needed.
+
+### 2. **Install and Enable the Service**
+
+```bash
+# Copy service file to systemd directory
+sudo cp robotiq-system.service /etc/systemd/system/
+
+# Reload systemd to recognize the new service
+sudo systemctl daemon-reload
+
+# Enable the service to start on boot
+sudo systemctl enable robotiq-system.service
+
+# Start the service immediately (optional)
+sudo systemctl start robotiq-system.service
+
+# Check service status
+sudo systemctl status robotiq-system.service
+```
+
+### 3. **Managing the Service**
+
+```bash
+# View service logs
+sudo journalctl -u robotiq-system.service -f
+
+# Stop the service
+sudo systemctl stop robotiq-system.service
+
+# Restart the service
+sudo systemctl restart robotiq-system.service
+
+# Disable auto-start (but keep service installed)
+sudo systemctl disable robotiq-system.service
+
+# Remove the service entirely
+sudo systemctl disable robotiq-system.service
+sudo rm /etc/systemd/system/robotiq-system.service
+sudo systemctl daemon-reload
+```
+
+### 4. **Verify Auto-Start**
+
+After enabling the service, reboot your Raspberry Pi:
+```bash
+sudo reboot
+```
+
+After reboot, check if the service is running:
+```bash
+sudo systemctl status robotiq-system.service
+```
+
+You should see the service is active and running. Check the logs if there are any issues:
+```bash
+sudo journalctl -u robotiq-system.service --since "10 minutes ago"
+```
+
 ## License
 
 This project is provided as-is for research and development purposes.

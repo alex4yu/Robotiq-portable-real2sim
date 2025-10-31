@@ -1,0 +1,29 @@
+[Unit]
+Description=Robotiq Gripper System Launcher
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=geoduderp5
+Group=geoduderp5
+WorkingDirectory=/home/geoduderp5/robotiq_ws
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash && python3 /home/geoduderp5/robotiq_ws/src/main_launcher.py'
+
+# Restart configuration
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=robotiq-system
+
+# Environment variables
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target
+
