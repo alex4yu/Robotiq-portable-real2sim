@@ -79,18 +79,14 @@ class SystemLauncher:
         """Start the IMU ROS publisher"""
         print("Starting IMU ROS publisher...")
         
-        # Check if ROS 2 is available
-        try:
-            result = subprocess.run(['which', 'ros2'], capture_output=True, text=True)
-            if result.returncode != 0:
-                print("ROS 2 not found. Please install ROS 2 Jazzy.")
-                return None
-        except:
-            print("ROS 2 not found. Please install ROS 2 Jazzy.")
+        imu_script = self.script_dir / "imu_ros_publisher.py"
+        
+        if not imu_script.exists():
+            print(f"IMU publisher script not found: {imu_script}")
             return None
         
-        # Create a single bash command that sources ROS 2 (no venv needed)
-        cmd = """bash -c 'source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash && ros2 run m5_imu_pro_ros2 imu_publisher'"""
+        # Create a single bash command that sources ROS 2 and runs the IMU publisher
+        cmd = """bash -c 'source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash && python3 """ + str(imu_script) + """'"""
         
         return self.start_process(cmd, "IMU Publisher")
     

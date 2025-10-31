@@ -1,111 +1,165 @@
 # BMI270 IMU ROS 2 Setup Guide
 
-This guide walks through setting up a BMI270 IMU with ROS 2 Jazzy, including proper Python virtual environment configuration.
+This guide walks through setting up a BMI270 IMU with ROS 2 Jazzy using a standalone Python script.
 
 ## Prerequisites
 
 - ROS 2 Jazzy installed
-- Python 3.12
-- Virtual environment setup
+- Python 3.10+ (system-wide, not virtual environment)
 - I2C enabled on Raspberry Pi
-- BMI270 IMU connected via I2C
+- BMI270 IMU connected via I2C (typically at address 0x68)
 
 ## Step-by-Step Setup
 
-### 1. **Create and Activate Virtual Environment**
+### 1. **Enable I2C Interface**
 
 ```bash
-# Create virtual environment
-python3 -m venv ~/venv
+# Enable I2C via raspi-config
+sudo raspi-config
+# Navigate to: Interface Options → I2C → Enable
 
-# Activate virtual environment
-source ~/venv/bin/activate
+# Verify I2C is enabled
+ls /dev/i2c-*
 
-# Verify activation (should show venv path)
-which python3
+# Should show /dev/i2c-1 (or similar)
 ```
 
-### 2. **Install Python Dependencies**
+### 2. **Install Python Dependencies (System-Wide)**
+
+Install the required packages system-wide (ROS 2 works better with system-wide packages):
 
 ```bash
-# Install required packages in virtual environment
-pip install smbus2 pymodbus
+# Install smbus2 for I2C communication
+pip3 install smbus2 --break-system-packages
 
 # Verify installation
 python3 -c "import smbus2; print('smbus2 installed successfully')"
-python3 -c "import pymodbus; print('pymodbus installed successfully')"
 ```
 
-### 3. **Create ROS 2 Workspace**
+**Note:** We use system-wide packages instead of a virtual environment because ROS 2 commands (`ros2 run`, `ros2 launch`) use system Python by default.
+
+### 3. **Verify I2C Connection**
+
+Check that the IMU is detected on the I2C bus:
 
 ```bash
-# Create workspace
-mkdir -p ~/ros2_ws/src
-cd ~/ros2_ws
+# Scan I2C bus for devices
+i2cdetect -y 1
 ```
 
-### 4. **Set Up Package Structure**
-
-Create the following directory structure:
+Expected output should show device at address `68` (or `0x68`):
 ```
-m5_imu_pro_ros2/
-├── package.xml
-├── setup.py
-├── setup.cfg
-├── m5_imu_pro_ros2/                    # Python package directory
-│   ├── __init__.py
-│   └── imu_pro_read_ros_publish.py     # Main Python file
-├── launch/
-│   └── imu_launch.py
-└── config/
-    └── imu_config.yaml
+     0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+00:                         -- -- -- -- -- -- -- -- 
+10: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 
+20: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 
+30: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 
+40: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 
+50: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 
+60: -- -- -- -- -- -- -- -- 68 -- -- -- -- -- -- -- 
+70: -- -- -- -- -- -- -- --
 ```
 
-### 5. **Copy Package Files**
+If the device is not found, check:
+- I2C is enabled (`sudo raspi-config`)
+- Wiring connections (SDA, SCL, VCC, GND)
+- Device address matches (0x68 is default for BMI270)
+
+### 4. **Set Up Port Permissions (If Needed)**
+
+If you encounter permission errors:
 
 ```bash
-# Copy the package to your workspace
-cp -r /path/to/m5_imu_pro_ros2 ~/ros2_ws/src/
+# Add your user to the i2c group
+sudo usermod -aG i2c $USER
+
+# Logout and login again for changes to take effect
 ```
 
-### 6. **Configure Python Environment for colcon**
+### 5. **Test the IMU Publisher**
 
-This is the crucial step that ensures colcon uses your virtual environment:
+The IMU publisher is a standalone Python script (`src/imu_ros_publisher.py`). To run it:
 
 ```bash
-# Activate virtual environment
-source ~/venv/bin/activate
+# Source ROS 2
+source /opt/ros/jazzy/setup.bash
 
-# Set Python path to include virtual environment packages
-export PYTHONPATH=$VIRTUAL_ENV/lib/python3.12/site-packages:$PYTHONPATH
-
-# Verify Python can find the packages
-python3 -c "import smbus2; import pymodbus; print('All packages accessible')"
+# Run the IMU publisher script
+python3 src/imu_ros_publisher.py
 ```
 
-### 7. **Build the ROS Package**
+Or run it via the main launcher:
 
 ```bash
-# Build with virtual environment Python
-colcon build --packages-select m5_imu_pro_ros2 --cmake-args -DPYTHON_EXECUTABLE=$(which python3)
-
-# Source the workspace
-source ~/ros2_ws/install/setup.bash
+python3 src/main_launcher.py
 ```
 
-### 8. **Test the IMU Publisher**
+The script will automatically:
+- Initialize the BMI270 sensor via I2C
+- Start publishing to `/imu/data` and `/imu/temperature` topics
+- Continue running until interrupted (Ctrl+C)
+
+### 6. **Verify IMU Data is Published**
+
+In a separate terminal:
 
 ```bash
-# Test direct execution
-ros2 run m5_imu_pro_ros2 imu_publisher
+# Source ROS 2
+source /opt/ros/jazzy/setup.bash
 
-# Test with launch file
-ros2 launch m5_imu_pro_ros2 imu_launch.py
+# List topics
+ros2 topic list
+
+# Should show:
+# /imu/data
+# /imu/temperature
+
+# View IMU data
+ros2 topic echo /imu/data
+
+# View temperature
+ros2 topic echo /imu/temperature
 ```
+
+You should see continuous data streams from the IMU.
 
 
 
 ## Published Topics
 
-- **`/imu/data`** (sensor_msgs/Imu): Linear acceleration, angular velocity, orientation
-- **`/imu/temperature`** (sensor_msgs/Temperature): Temperature readings
+- **`/imu/data`** (sensor_msgs/Imu): Linear acceleration, angular velocity, orientation quaternion
+- **`/imu/temperature`** (sensor_msgs/Temperature): Temperature readings in Celsius
+
+## Troubleshooting
+
+### "ModuleNotFoundError: No module named 'smbus2'"
+```bash
+pip3 install smbus2 --break-system-packages
+```
+
+### "Permission denied" on `/dev/i2c-*`
+```bash
+sudo usermod -aG i2c $USER
+# Logout and login again
+```
+
+### I2C device not found (no device at 0x68)
+- Verify I2C is enabled: `sudo raspi-config` → Interface Options → I2C
+- Check wiring: SDA, SCL, VCC (3.3V), GND
+- Verify device address: `i2cdetect -y 1` should show device at 0x68
+- Ensure IMU is powered on
+
+### "ROS2 not available" error
+```bash
+# Source ROS 2
+source /opt/ros/jazzy/setup.bash
+
+# Verify ROS 2 is installed
+ros2 --help
+```
+
+### No data published
+- Check that the script is running without errors
+- Verify I2C connection: `i2cdetect -y 1`
+- Check ROS 2 topics: `ros2 topic list`
+- Verify subscribers: `ros2 topic info /imu/data`

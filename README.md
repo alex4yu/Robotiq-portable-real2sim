@@ -1,149 +1,427 @@
-# Robotiq 2F-85 Gripper Control on Raspberry Pi
+# Robotiq Portable Real2Sim System
 
-This repository contains Python scripts and setup notes for controlling a **Robotiq 2F-85** gripper over RS-485 using a Raspberry Pi.  
-Two connection methods are supported:
-- **USB–RS485 converter** (quick sanity check)
-- **Waveshare RS485 CAN HAT (B)** (SPI → dual UART chip)
+A comprehensive system for controlling a **Robotiq 2F-85** gripper with integrated IMU, force/torque (FT) sensor, RealSense camera, and data recording capabilities. The system provides joystick-based teleoperation with proportional control and unified recording of all sensor data streams.
 
----
+## Overview
 
-## 1. Hardware Needed
+This system integrates multiple hardware components into a unified ROS 2 ecosystem:
 
-- **Robotiq 2F-85** gripper  
-- **24 V DC power supply** for the gripper  
-- **Raspberry Pi 5**   
-- **RS-485 interface**  
-  - *Option A:* USB–RS485 converter (e.g. CH340, FTDI, etc.)  
-  - *Option B:* Waveshare RS485 CAN HAT (B)  
-- **Cables**: 3-wire cable from gripper (current setup: White, Green, Bare = GND) + power leads for 24 V
+- **Robotiq 2F-85 Gripper** - Controlled via RS-485 Modbus communication
+- **M5 IMU Pro (BMI270)** - Inertial measurement unit publishing accelerometer, gyroscope, and temperature data
+- **FT Sensor** - Force/torque sensor (FT300-S) for measuring contact forces
+- **RealSense Camera** - Multi-stream camera (IR1, IR2, Color, Depth) for vision data
+- **M5 Joystick2** - I2C joystick for gripper control and recording toggle
 
----
+All components publish to ROS 2 topics and can be recorded simultaneously to ROS bag files for simulation replay.
 
-## 2. Wiring
+## Features
 
-### Robotiq cable pinout
-- **White = 485+ (non-inverting / D+) connect to terminal A on convertor/HAT**  
-- **Green = 485– (inverting / D–) connect to terminal B on converto/HAT**  
-- **Bare = RS-485 GND**  
+- ✅ **Proportional Gripper Control** - Joystick position maps to gripper speed and force
+- ✅ **Unified ROS 2 Integration** - All sensors publish to standardized topics
+- ✅ **Synchronized Recording** - Capture all data streams (IMU, FT, camera, gripper state) simultaneously
+- ✅ **LED Status Indicators** - Visual feedback for recording state (RED = not recording, GREEN = recording)
+- ✅ **Process Management** - Automatic startup, monitoring, and graceful shutdown of all components
+- ✅ **Dependency Checking** - Validates all required dependencies before startup
 
-The gripper requires separate 24 VDC power. The USB converter or HAT does not provide power.
+## System Architecture
 
-### USB–RS485 Converter
-- White → **A**  
-- Green → **B**  
-- Bare → **GND**  
-- Also connect **24 V + and GND** to the gripper’s power pins.  
+The system consists of three main ROS 2 publishers and one unified controller:
 
-### RS485 CAN HAT (B) — RS485_0 terminal
-- White → **A**  
-- Green → **B**  
-- Bare → **GND**  
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Main Launcher                            │
+│                  (main_launcher.py)                         │
+│                                                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐ │
+│  │ IMU Publisher│  │ FT Publisher │  │ Unified Controller│ │
+│  │              │  │              │  │                   │ │
+│  │ /imu/data    │  │ /ft_sensor/  │  │ - Gripper Control │ │
+│  │ /imu/temp    │  │   wrench     │  │ - RealSense      │ │
+│  │              │  │   accel      │  │ - Recording      │ │
+│  └──────────────┘  └──────────────┘  └──────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
 
----
+### Components
 
-## 3. HAT Setup (Raspberry Pi OS Bookworm)
+1. **IMU Publisher** (`imu_ros_publisher.py`)
+   - Reads BMI270 sensor via I2C
+   - Publishes to `/imu/data` (sensor_msgs/Imu)
+   - Publishes to `/imu/temperature` (sensor_msgs/Temperature)
 
-The HAT uses an **SC16IS752 dual UART (via SPI)** for RS-485.
+2. **FT Sensor Publisher** (`ft_sensor_ros_publisher.py`)
+   - Reads FT300-S sensor via RS-485 Modbus
+   - Publishes to `/ft_sensor/wrench` (geometry_msgs/WrenchStamped)
+   - Publishes to `/ft_sensor/acceleration` (geometry_msgs/Vector3Stamped)
 
-1. Edit `/boot/firmware/config.txt` add this to the bottom:
+3. **Unified System Controller** (`unified_system_controller.py`)
+   - Gripper control via joystick (proportional)
+   - RealSense streaming (IR1, IR2, Color, Depth)
+   - Recording toggle via joystick button
+   - LED status indicator
 
-   dtparam=spi=on
-   dtoverlay=mcp2515-can0,oscillator=16000000,interrupt=25,spimaxfrequency=1000000
-   dtoverlay=sc16is752-spi1,int_pin=24
-2. Reboot
+## Quick Start
 
-Run in terminal:
+### Prerequisites
 
-    sudo reboot
+- **Hardware:**
+  - Raspberry Pi 5 (recommended) or compatible Linux system
+  - Robotiq 2F-85 gripper with 24V power supply
+  - M5 IMU Pro (BMI270)
+  - FT300-S force/torque sensor
+  - RealSense camera (D435/D435i recommended)
+  - M5 Joystick2
+  - RS-485 interface (USB converter or Waveshare RS485 CAN HAT)
+  - I2C enabled on Raspberry Pi
 
----
+- **Software:**
+  - ROS 2 Jazzy (or compatible)
+  - Python 3.10+
+  - System-wide Python packages (see Installation)
 
-3. Verify devices
+### Installation
+
+1. **Install ROS 2 Jazzy:**
+   ```bash
+   # Follow ROS 2 Jazzy installation guide for your platform
+   # https://docs.ros.org/en/jazzy/Installation.html
+   ```
+
+2. **Install Python dependencies:**
+   ```bash
+   pip3 install smbus2 pymodbus==2.5.3 minimalmodbus pyserial pyrealsense2 --break-system-packages
+   ```
+   
+   **Important:** You must use `pymodbus==2.5.3` (v2.x). Do not use pymodbus v3.x as it has breaking API changes that are incompatible with this system.
+
+3. **Build ROS 2 workspace:**
+   ```bash
+   cd ~/ros2_ws
+   source /opt/ros/jazzy/setup.bash
+   colcon build
+   source ~/ros2_ws/install/setup.bash
+   ```
+
+4. **Configure hardware:**
+   - See `IMU_SETUP_GUIDE.md` for IMU setup
+   - See `REALSENSE_SETUP_GUIDE.md` for RealSense setup
+   - Ensure I2C is enabled: `sudo raspi-config` → Interface Options → I2C
+
+## Hardware Setup
+
+### RS-485 Connection Options
+
+The system supports two RS-485 connection methods for the Robotiq gripper and FT sensor:
+
+- **Option A:** USB-RS485 converter (e.g., CH340, FTDI) - Quick setup for testing
+- **Option B:** Waveshare RS485 CAN HAT (B) - Recommended for permanent setup
+
+### Port Configuration and Setup
+
+#### USB-RS485 Converter Setup
+
+1. **Find the USB device:**
+   ```bash
+   sudo dmesg | grep ttyUSB
+   ```
+   Typically shows `/dev/ttyUSB0` or similar
+
+2. **Configure the port in `unified_system_controller.py`:**
+   ```python
+   PORT = "/dev/ttyUSB0"
+   ```
+
+#### RS485 CAN HAT (B) Setup
+
+The Waveshare RS485 CAN HAT uses an **SC16IS752 dual UART chip (via SPI)** for RS-485 communication.
+
+**1. Configure Raspberry Pi OS (Bookworm):**
+
+Edit `/boot/firmware/config.txt` and add these lines at the bottom:
+
+```
+dtparam=spi=on
+dtoverlay=mcp2515-can0,oscillator=16000000,interrupt=25,spimaxfrequency=1000000
+dtoverlay=sc16is752-spi1,int_pin=24
+```
+
+**2. Reboot the Raspberry Pi:**
+```bash
+sudo reboot
+```
+
+**3. Verify UART devices:**
 
 After reboot, check for new UART devices:
-
-    ls /dev/ttySC*
+```bash
+ls /dev/ttySC*
+```
 
 Expected output:
+```
+/dev/ttySC0  /dev/ttySC1
+```
 
-    /dev/ttySC0  /dev/ttySC1
+Use `/dev/ttySC0` for the gripper (RS485_0 terminal block).  
+Use `/dev/ttySC1` for the FT sensor if connected to RS485_1.
 
-Use /dev/ttySC0 for the RS485_0 terminal block.
+**4. Set up port permissions:**
 
-Note: You do not need wiringPi, bcm2835, or lgpio for this workflow. The kernel driver exposes /dev/ttySC* directly.
+Add your user to the `dialout` group to access serial ports:
+```bash
+sudo usermod -aG dialout $USER
+```
+Logout and login again for changes to take effect.
 
----
+**Important:** The gripper requires a separate **24V DC power supply**. The USB converter or HAT does not provide power to the gripper.
 
-4. Software Setup
+### Expected Gripper Behavior
 
-a. Go to your workspace:
+When the system starts correctly:
 
-       cd robotiq_ws
+- **Power-up (no communication):** Gripper LED = **RED** (waiting for activation)
+- **After activation:** Gripper LED = **BLUE** (activated and ready)
+- **During operation:** The keepalive thread continuously polls gripper status to prevent timeout faults
+- **If LED turns blue then red:** Keepalive is missing - ensure the control script is running
 
-b. Create and activate a Python virtual environment:
+### Running the System
 
-       python3 -m venv venv
-       source venv/bin/activate
+**Start all components:**
+```bash
+python3 src/main_launcher.py
+```
 
-c. Install dependencies (listed in requirements.txt):
+The launcher will:
+1. Check all dependencies
+2. Start IMU publisher
+3. Start FT sensor publisher
+4. Start unified system controller (gripper + camera + recording)
 
-       pip install -r requirements.txt
+## Controls
 
-requirements.txt should include:
+### Joystick Operation
 
-    pyserial
-    pymodbus
+- **UP (Push)** - Open gripper
+  - Push further = faster opening speed
+  - Fixed force (max for reliable opening)
 
-The requirements may need to be updated
----
+- **DOWN (Pull)** - Close gripper
+  - Pull further = faster speed + stronger grip force
+  - Proportional control for precise grasping
 
-5. Running the Test Script
+- **CENTER** - Stop and hold position
+  - Gripper stops immediately and maintains current position
 
-A) USB–RS485
+- **Button Press** - Toggle recording
+  - First press: Start recording all streams to ROS bag
+  - Second press: Stop recording and save bag file
+  - LED indicates state: RED = not recording, GREEN = recording
 
-A1. Find the USB device:
+### Recorded Topics
 
-       sudo dmesg | grep ttyUSB
+When recording is active, the following topics are saved to a ROS bag file:
 
-For example, you might see /dev/ttyUSB0.
+- `/camera/infra1/image_raw` - Infrared stream 1
+- `/camera/infra2/image_raw` - Infrared stream 2
+- `/camera/color/image_raw` - RGB color stream
+- `/camera/depth/image_raw` - Depth stream
+- `/imu/data` - IMU accelerometer and gyroscope data
+- `/imu/temperature` - IMU temperature
+- `/ft_sensor/wrench` - Force and torque measurements
+- `/ft_sensor/acceleration` - FT sensor accelerometer
 
-A2. Open src/robotiq_keepalive_open_close.py and set:
+Bag files are saved to: `~/robotiq_ws/recordings/` with timestamp format: `YYYY-MM-DD-HH.MM.SS.bag`
 
-    PORT = "/dev/ttyUSB0"
+## Configuration
 
-A3. Run the script:
+### Port Configuration
 
-       python src/robotiq_keepalive_open_close.py
+Edit the following files to match your hardware setup:
 
-B) RS485 CAN HAT (recommended)
+**Gripper (unified_system_controller.py):**
+```python
+PORT = "/dev/ttySC0"  # Change to "/dev/ttyUSB0" for USB converter
+BAUD = 115200
+UNIT = 9
+```
 
-B1. Confirm /dev/ttySC0 exists.
-B2. Open src/robotiq_keepalive_open_close.py and set:
+**FT Sensor (ft_sensor_ros_publisher.py):**
+```python
+PORT = "/dev/ttySC1"  # Adjust for your setup
+SLAVE = 9
+```
 
-    PORT = "/dev/ttySC0"
+### Joystick Calibration
 
-B3. Run the script:
+Adjust thresholds and ranges in `unified_system_controller.py`:
 
-       python src/robotiq_keepalive_open_close.py
+```python
+DEADZONE_RADIUS = 200        # Deadzone size
+Y_OPEN_THRESHOLD = 300       # Threshold for open command
+Y_CLOSE_THRESHOLD = -300     # Threshold for close command
+MIN_OPEN_SPEED = 0x10        # Minimum opening speed
+MAX_OPEN_SPEED = 0xFF        # Maximum opening speed
+MIN_CLOSE_FORCE = 0x10       # Minimum closing force (gentle)
+MAX_CLOSE_FORCE = 0xFF       # Maximum closing force (strong)
+```
 
----
+## Troubleshooting
 
-6. Expected Behavior
+### Common Issues
 
-- On power-up: gripper LED = red (waiting for communication)
-- After activation: LED = blue
-- The script keeps polling status (prevents timeout faults)
-- Gripper should close then open
+**"ModuleNotFoundError: No module named 'smbus2'"**
+```bash
+pip3 install smbus2 --break-system-packages
+```
 
----
+**"Could not connect to gripper"**
+- Check RS-485 connection and port: `ls /dev/ttySC*` or `ls /dev/ttyUSB*`
+- Verify 24V power supply is connected (separate from RS-485)
+- **If using HAT:** Verify `/dev/ttySC*` devices exist after reboot
+  - Check `/boot/firmware/config.txt` has correct overlays
+  - Ensure SPI is enabled: `dtparam=spi=on`
+- **If no response:** Verify RS-485 wiring connections and grounds
+- **LED behavior troubleshooting:**
+  - LED red (waiting): Normal on power-up, should turn blue after activation
+  - LED blue then red: Keepalive missing - ensure control script is running continuously
 
-7. Troubleshooting
+**"I2C device not found" (IMU or Joystick)**
+```bash
+# Enable I2C
+sudo raspi-config  # Interface Options → I2C → Enable
 
-- LED turns blue then red again → keepalive missing; ensure script is running.
-- No response → swap A/B wires, confirm 24 V supply, check grounds.
-- Permission denied on /dev/tty* → add your user to the dialout group:
+# Scan for devices
+i2cdetect -y 1
 
-      sudo usermod -aG dialout $USER
+# Should show:
+# - 0x68 for BMI270 IMU
+# - 0x63 for M5 Joystick2
+```
 
-- No /dev/ttySC* devices → double-check overlays in /boot/firmware/config.txt.
+**"Permission denied" on /dev/tty*** or `/dev/i2c-*`**
+```bash
+sudo usermod -aG dialout $USER
+sudo usermod -aG i2c $USER
+# Logout and login again
+```
+
+**No /dev/ttySC* devices (HAT not detected)**
+- Double-check overlays in `/boot/firmware/config.txt`
+- Verify SPI is enabled: `dtparam=spi=on`
+- Ensure `dtoverlay=sc16is752-spi1,int_pin=24` is present
+- Reboot after editing config.txt
+- Check if HAT is properly seated on Raspberry Pi GPIO pins
+
+**ROS 2 commands not found**
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+# Or add to ~/.bashrc permanently
+echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+echo "source ~/ros2_ws/install/setup.bash" >> ~/.bashrc
+```
+
+**RealSense camera not detected**
+- Check USB connection
+- Install RealSense SDK: See `REALSENSE_SETUP_GUIDE.md`
+- Verify with: `rs-enumerate-devices`
+
+### Process Monitoring
+
+The main launcher monitors all processes and will report if any component stops unexpectedly. Check the console output for error messages from individual components.
+
+## Project Structure
+
+```
+.
+├── README.md                      # This file
+├── requirements.txt               # Python dependencies
+├── SYSTEM_SETUP_SUMMARY.md        # Detailed setup instructions
+├── IMU_SETUP_GUIDE.md            # IMU configuration guide
+├── REALSENSE_SETUP_GUIDE.md      # RealSense setup guide
+├── src/
+│   ├── main_launcher.py          # Main system launcher
+│   ├── unified_system_controller.py  # Gripper + Camera + Recording
+│   ├── imu_ros_publisher.py      # IMU ROS 2 publisher
+│   ├── ft_sensor_ros_publisher.py    # FT sensor ROS 2 publisher
+│   └── testing/                  # Test and development scripts
+└── m5_imu_pro_ros2/              # ROS 2 package for M5 IMU Pro
+    ├── setup.py
+    ├── package.xml
+    └── m5_imu_pro_ros2/
+        └── imu_pro_read_ros_publish.py
+```
+
+## Dependencies
+
+### Python Packages (Required)
+- `pymodbus==2.5.3` - Modbus communication for gripper and FT sensor (**IMPORTANT: Use v2.x only, v3.x has breaking changes**)
+- `pyserial` - Serial port communication
+- `smbus2` - I2C communication for IMU and joystick
+- `minimalmodbus` - Modbus for FT sensor
+- `pyrealsense2` - RealSense camera SDK (optional if not using camera)
+
+### System Packages
+- ROS 2 Jazzy desktop
+- `python3-colcon-common-extensions` - Build tools
+- `i2c-tools` - I2C debugging utilities
+
+## Additional Resources
+
+- **System Setup:** See `SYSTEM_SETUP_SUMMARY.md` for detailed installation
+- **IMU Configuration:** See `IMU_SETUP_GUIDE.md`
+- **RealSense Setup:** See `REALSENSE_SETUP_GUIDE.md`
+- **Hardware Wiring:** Detailed wiring diagrams and RS-485 setup in this README
+
+## ROS 2 Topics
+
+### Published Topics
+
+| Topic | Message Type | Description |
+|-------|--------------|-------------|
+| `/imu/data` | `sensor_msgs/Imu` | IMU accelerometer and gyroscope data |
+| `/imu/temperature` | `sensor_msgs/Temperature` | IMU temperature reading |
+| `/ft_sensor/wrench` | `geometry_msgs/WrenchStamped` | Force and torque measurements |
+| `/ft_sensor/acceleration` | `geometry_msgs/Vector3Stamped` | FT sensor accelerometer |
+| `/camera/infra1/image_raw` | `sensor_msgs/Image` | RealSense IR stream 1 |
+| `/camera/infra2/image_raw` | `sensor_msgs/Image` | RealSense IR stream 2 |
+| `/camera/color/image_raw` | `sensor_msgs/Image` | RealSense RGB color stream |
+| `/camera/depth/image_raw` | `sensor_msgs/Image` | RealSense depth stream |
+
+### Viewing Data
+
+```bash
+# List all topics
+ros2 topic list
+
+# Echo IMU data
+ros2 topic echo /imu/data
+
+# Echo FT sensor data
+ros2 topic echo /ft_sensor/wrench
+
+# View topic info
+ros2 topic info /imu/data
+```
+
+## Stopping the System
+
+Press `Ctrl+C` in the terminal running `main_launcher.py`. The launcher will:
+1. Gracefully stop all processes
+2. Stop any active recordings
+3. Open the gripper before shutdown
+4. Turn off LED indicators
+
+## License
+
+This project is provided as-is for research and development purposes.
+
+## Support
+
+For issues and questions:
+1. Check the troubleshooting section above
+2. Review the setup guides in the project
+3. Verify hardware connections and configurations
+4. Check ROS 2 topic outputs: `ros2 topic list` and `ros2 topic echo <topic_name>`
 
